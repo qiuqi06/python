@@ -1,0 +1,7 @@
+			<fields action="any">
+				<field name="uniquekey" longname="登录设备唯一值" req="true" />
+				<field name="mastid" longname="客户mastid" req="true" />
+				<field name="userid" longname="用户userid"  req="true" />
+				<field name="custno" longname="企业客户号" req="true" />
+			</fields>
+		</transaction>
