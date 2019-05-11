@@ -1,10 +1,12 @@
 import cv2 as cv
 
+
 def get_image_info(image):
-    print(type(image))
-    print(image.shape)
-    print(image.size)
-    print(image.dtype)
+	print(type(image))
+	print(image.shape)  # shape0~3  height width  channels
+	print(image.size)
+	print(image.dtype)
+
 
 src = cv.imread("image/000.jpg")
 cv.namedWindow("jpg", cv.WINDOW_AUTOSIZE)
