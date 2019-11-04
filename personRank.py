@@ -2,15 +2,16 @@
 import numpy as np
 import pandas as pd
 import math
-import time
 import random
+from scipy.sparse.linalg import gmres, lgmres
+from scipy.sparse import csr_matrix
 
 
 def genData():
     data = pd.read_csv('test1/200509', header=None, sep='\t')
     data.columns = ['date', 'user', 'item', 'label']
     data.drop('date', axis=1, inplace=True)
-    data = data[:5000]
+    data = data[:10000]
     print
     "genData successed!"
     return data
@@ -37,9 +38,9 @@ def SplitData(Data, M, k, seed):
     '''
     划分训练集和测试集
     :param data:传入的数据
-    :param M:测试集占比10
-    :param k:一个任意的数字，用来随机筛选测试集和训练集5
-    :param seed:随机数种子，在seed一样的情况下，其产生的随机数不变10
+    :param M:测试集占比
+    :param k:一个任意的数字，用来随机筛选测试集和训练集
+    :param seed:随机数种子，在seed一样的情况下，其产生的随机数不变
     :return:train:训练集 test：测试集，都是字典，key是用户id,value是电影id集合
     '''
     data = Data.keys()
@@ -73,7 +74,6 @@ def getTU(user, test, N):
 
 
 def new_getTU(user, test, N):
-    user_items = dict()
     for user1, item, tag in test:
         if user1 != user:
             continue
@@ -90,7 +90,7 @@ def new_getTU(user, test, N):
     return items
 
 
-def Recall(train, test, G, alpha, max_depth, N, user_items):
+def Recall(train, test, AA, M, G, alpha, N, user_items):
     '''
     :param train: 训练集
     :param test: 测试集
@@ -102,7 +102,7 @@ def Recall(train, test, G, alpha, max_depth, N, user_items):
     totla = 0  # 所有行为总数
     for user, item, tag in train:
         tu = getTU(user, test, N)
-        rank = GetRecommendation(G, alpha, user, max_depth, N, user_items)
+        rank = GetRecommendation(AA, M, G, alpha, user, N, user_items)
         for item in rank:
             if item in tu:
                 hit += 1
@@ -112,7 +112,7 @@ def Recall(train, test, G, alpha, max_depth, N, user_items):
     return hit / (totla * 1.0)
 
 
-def Precision(train, test, G, alpha, max_depth, N, user_items):
+def Precision(train, test, AA, M, G, alpha, N, user_items):
     '''
     :param train:
     :param test:
@@ -124,7 +124,7 @@ def Precision(train, test, G, alpha, max_depth, N, user_items):
     total = 0
     for user, item, tag in train:
         tu = getTU(user, test, N)
-        rank = GetRecommendation(G, alpha, user, max_depth, N, user_items)
+        rank = GetRecommendation(AA, M, G, alpha, user, N, user_items)
         for item in rank:
             if item in tu:
                 hit += 1
@@ -134,7 +134,7 @@ def Precision(train, test, G, alpha, max_depth, N, user_items):
     return hit / (total * 1.0)
 
 
-def Coverage(train, G, alpha, max_depth, N, user_items):
+def Coverage(train, AA, M, G, alpha, N, user_items):
     '''
     计算覆盖率
     :param train:训练集 字典user->items
@@ -147,7 +147,7 @@ def Coverage(train, G, alpha, max_depth, N, user_items):
     all_items = set()
     for user, item, tag in train:
         all_items.add(item)
-        rank = GetRecommendation(G, alpha, user, max_depth, N, user_items)
+        rank = GetRecommendation(AA, M, G, alpha, user, N, user_items)
         for item in rank:
             recommend_items.add(item)
     print
@@ -155,7 +155,7 @@ def Coverage(train, G, alpha, max_depth, N, user_items):
     return len(recommend_items) / (len(all_items) * 1.0)
 
 
-def Popularity(train, G, alpha, max_depth, N, user_items):
+def Popularity(train, AA, M, G, alpha, N, user_items):
     '''
     计算平均流行度
     :param train:训练集 字典user->items
@@ -172,7 +172,7 @@ def Popularity(train, G, alpha, max_depth, N, user_items):
     ret = 0
     n = 0
     for user, item, tag in train:
-        rank = GetRecommendation(G, alpha, user, max_depth, N, user_items)
+        rank = GetRecommendation(AA, M, G, alpha, user, N, user_items)
         for item in rank:
             if item != 0 and item in item_popularity:
                 ret += math.log(1 + item_popularity[item])
@@ -200,11 +200,11 @@ def CosineSim(item_tags, item_i, item_j):
     return ret / math.sqrt(ni * nj)
 
 
-def Diversity(train, G, alpha, max_depth, N, user_items, item_tags):
+def Diversity(train, AA, M, G, alpha, N, item_tags, user_items):
     ret = 0.0
     n = 0
     for user, item, tag in train:
-        rank = GetRecommendation(G, alpha, user, max_depth, N, user_items)
+        rank = GetRecommendation(AA, M, G, alpha, user, N, user_items)
         for item1 in rank:
             for item2 in rank:
                 if item1 == item2:
@@ -266,40 +266,79 @@ def buildGrapha(record):
         else:
             item_tags[item][tag] += 1
 
+    print
+    "buildGrapha successed!"
+
     return graph, user_items, user_tags, tag_items, item_tags
 
 
-def GetRecommendation(G, alpha, root, max_depth, N, user_items):
-    rank = dict()
-    rank = {x: 0 for x in G.keys()}
-    rank[root] = 1
-    # 开始迭代
-    for k in range(max_depth):
-        tmp = {x: 0 for x in G.keys()}
-        # 取出节点i和他的出边尾节点集合ri
-        for i, ri in G.items():
-            # 取节点i的出边的尾节点j以及边E(i,j)的权重wij,边的权重都为1，归一化后就是1/len(ri)
-            for j, wij in ri.items():
-                tmp[j] += alpha * rank[i] * (wij / (1.0 * len(ri)))
-        tmp[root] += (1 - alpha)
-        rank = tmp
-    lst = sorted(rank.items(), key=lambda x: x[1], reverse=True)
+def buildMatrix_M(G):
+    M = []
+    for key in G.keys():
+        lst = []
+        key_out = len(G[key])
+        for key1 in G.keys():
+            if key1 in G[key]:
+                w = G[key][key1]
+                lst.append(w / (1.0 * key_out))
+            else:
+                lst.append(0)
+        M.append(lst)
+    print
+    "buildMatrix_M successed!"
+    return np.matrix(M)
+
+
+def before_GetRec(M):
+    n = M.shape[0]
+
+    A = np.eye(n) - alpha * M.T
+
+    data = list()
+    row_ind = list()
+    col_ind = list()
+    for row in range(n):
+        for col in range(n):
+            if (A[row, col] != 0):
+                data.append(A[row, col])
+                row_ind.append(row)
+                col_ind.append(col)
+    AA = csr_matrix((data, (row_ind, col_ind)), shape=(n, n))
+    print
+    "before_GetRec successed!"
+    return AA
+
+
+def GetRecommendation(AA, M, G, alpha, root, N, user_items):
     items = []
+    vertex = G.keys()
+    index = G.keys().index(root)
+    n = M.shape[0]
+    zeros = np.zeros((n, 1))
+    zeros[index][0] = 1
+    r0 = np.matrix(zeros)
+    b = (1 - alpha) * r0
+
+    r = gmres(AA, b, tol=1e-08, maxiter=1)[0]
+    rank = {}
+    for j in range(n):
+        rank[vertex[j]] = r[j]
+    li = sorted(rank.items(), key=lambda x: x[1], reverse=True)
     for i in range(N):
-        item = lst[i][0]
+        item = li[i][0]
         if '/' in item and item not in user_items[root]:
             items.append(item)
     return items
 
 
-def evaluate(train, test, G, alpha, max_depth, N, user_items, item_tags):
+def evaluate(train, test, AA, M, G, alpha, N, item_tags, user_items):
     ##计算一系列评测标准
 
-    recall = Recall(train, test, G, alpha, max_depth, N, user_items)
-    precision = Precision(train, test, G, alpha, max_depth, N, user_items)
-    coverage = Coverage(train, G, alpha, max_depth, N, user_items)
-    popularity = Popularity(train, G, alpha, max_depth, N, user_items)
-    diversity = Diversity(train, G, alpha, max_depth, N, user_items, item_tags)
+    recall = Recall(train, test, AA, M, G, alpha, N, user_items)
+    precision = Precision(train, test, AA, M, G, alpha, N, user_items)
+    coverage = Coverage(train, AA, M, G, alpha, N, user_items)
+    popularity = Popularity(train, AA, M, G, alpha, N, user_items)
+    diversity = Diversity(train, AA, M, G, alpha, N, item_tags, user_items)
     return recall, precision, coverage, popularity, diversity
 
 
@@ -311,5 +350,7 @@ if __name__ == '__main__':
     max_depth = 50;
     alpha = 0.8
     G, user_items, user_tags, tag_items, item_tags = buildGrapha(train)
-    recall, precision, coverage, popularity, diversity = evaluate(train, test, G, alpha, max_depth, N, user_items,
-                                                                  item_tags)
+    M = buildMatrix_M(G)
+    AA = before_GetRec(M)
+    recall, precision, coverage, popularity, diversity = evaluate(train, test, AA, M, G, alpha, N, item_tags,
+                                                                  user_items)
