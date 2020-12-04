@@ -5,7 +5,7 @@ import math
 import time
 import random
 
-
+print('hello'
 def genData():
     data = pd.read_csv('test1/200509', header=None, sep='\t')
     data.columns = ['date', 'user', 'item', 'label']
